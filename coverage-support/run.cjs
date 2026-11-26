@@ -7,11 +7,21 @@ const { createContext } = require('istanbul-lib-report');
 const reports = require('istanbul-reports');
 
 const root = path.resolve(__dirname, '..');
-const generated = path.join(root, 'coverage-source');
 const raw = path.join(root, '.nyc_output');
 const output = path.join(root, 'coverage');
 const source = path.join(root, 'validated-method.js');
-for (const dir of [generated, raw, output]) {
+// The instrumented code temporarily replaces the source, so package.js never
+// has to point at generated files. The backup also repairs an interrupted run.
+const backupDir = path.join(root, '.coverage-backup');
+const backup = path.join(backupDir, 'validated-method.js');
+const restoreSource = () => {
+  if (fs.existsSync(backup)) {
+    fs.copyFileSync(backup, source);
+    fs.rmSync(backupDir, { recursive: true, force: true });
+  }
+};
+restoreSource();
+for (const dir of [raw, output, backupDir]) {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
 }
@@ -21,8 +31,13 @@ const instrumenter = createInstrumenter({
   coverageGlobalScope: 'globalThis',
   coverageGlobalScopeFunc: false,
 });
-fs.writeFileSync(path.join(generated, 'validated-method.js'),
-  instrumenter.instrumentSync(fs.readFileSync(source, 'utf8'), source));
+const original = fs.readFileSync(source, 'utf8');
+fs.copyFileSync(source, backup);
+fs.writeFileSync(source, instrumenter.instrumentSync(original, source));
+// Without listeners Node exits immediately on these signals and skips `finally`
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => { process.exitCode = 1; });
+}
 
 // test-packages bundles a separate test app and Npm.require ignores NODE_PATH,
 // so the browser driver must be an npm dependency of that app. Meteor runs
@@ -71,5 +86,5 @@ try {
   }
   process.exitCode = result.status === null ? 1 : result.status;
 } finally {
-  fs.rmSync(generated, { recursive: true, force: true });
+  restoreSource();
 }

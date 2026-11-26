@@ -14,9 +14,7 @@ Package.onUse(function (api) {
     'ddp',
   ]);
 
-  api.mainModule(process.env.VALIDATED_METHOD_COVERAGE
-    ? 'coverage-source/validated-method.js'
-    : 'validated-method.js');
+  api.mainModule('validated-method.js');
   api.export('ValidatedMethod');
 });
 

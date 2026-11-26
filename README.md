@@ -359,14 +359,15 @@ npm ci
 npm run test:coverage
 ```
 
-The runner instruments a temporary copy of `validated-method.js` before Meteor
-compiles it, then runs
+The runner temporarily replaces `validated-method.js` with an instrumented
+version, then runs
 `meteor test-packages --once --driver-package meteortesting:mocha ./`.
-Only coverage runs select this copy; ordinary package consumers use the original
-source. Test-only Mocha hooks save counters in `.nyc_output/`. The runner merges
+The original is kept in `.coverage-backup/` and restored afterwards, also after
+a failure or Ctrl+C; if a run is killed outright, the next run restores it first.
+`package.js` always uses the original source. Test-only Mocha hooks save counters in `.nyc_output/`. The runner merges
 the counters and writes `coverage/index.html`, `coverage/lcov.info`, and
 `coverage/coverage-final.json`, with locations referring to the original source.
-It preserves a failing test command's exit status and removes the generated source.
+It preserves a failing test command's exit status.
 Run only one coverage process at a time in this checkout.
 
 For browser coverage, configure the test driver's browser support (for example,
