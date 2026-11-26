@@ -45,6 +45,9 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 // puppeteer 19 is the newest line that still runs on Meteor 2.x (Node 14).
 const testApp = path.join(root, '.test-app');
 fs.mkdirSync(testApp, { recursive: true });
+// Versions resolved by a newer Meteor release would block an older one
+// ("Potentially incompatible change required to top-level dependency")
+fs.rmSync(path.join(testApp, '.meteor', 'versions'), { force: true });
 fs.writeFileSync(path.join(testApp, 'package.json'), `${JSON.stringify({
   private: true,
   dependencies: {
