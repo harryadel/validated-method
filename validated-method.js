@@ -5,6 +5,9 @@ const supportsAsyncMethods = () =>
     typeof Meteor.callAsync === 'function' &&
     typeof Meteor.applyAsync === 'function';
 
+const canCallAsync = method =>
+  supportsAsyncMethods() && typeof method.connection.applyAsync === 'function';
+
 // Thrown from a client stub started by call() when validate returns a promise.
 // Meteor's client `apply` cannot wait for an async stub, so call() catches this
 // and retries through callAsync, which awaits validation before calling the server.
@@ -94,7 +97,7 @@ export class ValidatedMethod {
     // Async validation needs callAsync on the client. It is detected on the
     // first call and remembered, so later calls skip the synchronous stub.
     const canRetryAsync = Meteor.isClient &&
-      supportsAsyncMethods() &&
+      canCallAsync(this) &&
       this.applyOptions.throwStubExceptions &&
       !DDP._CurrentMethodInvocation.get();
     if (canRetryAsync && this._validatesAsync) {
@@ -125,8 +128,11 @@ export class ValidatedMethod {
   }
 
   callAsync(args) {
-    if (!supportsAsyncMethods()) {
-      throw new Error('Async methods are not supported in this version of Meteor');
+    // Report missing support as a rejection, like any other callAsync failure
+    if (!canCallAsync(this)) {
+      return Promise.reject(new Error(supportsAsyncMethods()
+        ? `The connection of method '${this.name}' does not support applyAsync`
+        : 'Async methods are not supported in this version of Meteor'));
     }
 		//taken from the callAsync method internals which will use applyAsync with a isFromCallAsync param
 		//which will flag methods as running on DDP

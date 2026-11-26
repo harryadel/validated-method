@@ -161,19 +161,22 @@ describe('mdg:method', () => {
     });
   }
 
-  it('rejects callAsync when the Meteor release has no async methods', () => {
+  it('rejects callAsync when the Meteor release has no async methods', async () => {
     // 2.x < 2.8 lacks these already; on newer releases remove them temporarily
     const { callAsync, applyAsync } = Meteor;
     Meteor.callAsync = undefined;
     Meteor.applyAsync = undefined;
+    let promise;
     try {
-      assert.throws(() => {
-        asyncMethodNoTimeout.callAsync({ param: 1 });
-      }, 'Async methods are not supported in this version of Meteor');
+      promise = asyncMethodNoTimeout.callAsync({ param: 1 });
     } finally {
       Meteor.callAsync = callAsync;
       Meteor.applyAsync = applyAsync;
     }
+    await assertThrows({
+      fn: () => promise,
+      message: 'Async methods are not supported in this version of Meteor',
+    });
   });
 
 
@@ -529,7 +532,7 @@ if (Meteor.isServer) {
     }
 
     if (!supportsAsyncMethods) {
-      it('throws synchronously from server callAsync without forwarding when async methods are unsupported', () => {
+      it('rejects server callAsync without forwarding when async methods are unsupported', async () => {
         const f = fixture();
         let forwarded = false;
         f.connection.applyAsync = function () {
@@ -537,12 +540,21 @@ if (Meteor.isServer) {
           return Promise.resolve();
         };
         const method = new ValidatedMethod(f.options);
-        let returned;
-        assert.throws(() => {
-          returned = method.callAsync({ value: 1 });
-        }, Error, 'Async methods are not supported in this version of Meteor');
-        assert.isUndefined(returned);
+        await assertThrows({
+          fn: () => method.callAsync({ value: 1 }),
+          message: 'Async methods are not supported in this version of Meteor',
+        });
         assert.isFalse(forwarded);
+      });
+    }
+
+    if (supportsAsyncMethods) {
+      it('rejects callAsync when the connection has no applyAsync', async () => {
+        const method = new ValidatedMethod(fixture().options);
+        await assertThrows({
+          fn: () => method.callAsync({}),
+          message: "The connection of method 'serverContract' does not support applyAsync",
+        });
       });
     }
 
@@ -1138,6 +1150,13 @@ if (Meteor.isClient) {
         const returned = DDP._CurrentMethodInvocation.withValue({ isSimulation: true },
           () => method.call({}));
         assert.equal(await returned, 'stub result');
+        assert.deepEqual(calls, { apply: 1, applyAsync: 0, validate: 1 });
+      });
+
+      it('keeps apply when the connection has no applyAsync', async () => {
+        const { method, calls } = fixture();
+        delete method.connection.applyAsync;
+        assert.equal(await method.call({}), 'stub result');
         assert.deepEqual(calls, { apply: 1, applyAsync: 0, validate: 1 });
       });
 
