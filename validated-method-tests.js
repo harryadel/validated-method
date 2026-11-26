@@ -566,6 +566,15 @@ if (Meteor.isServer) {
 
 // Keep the synchronous-schema suite above intact while specifying the async contract.
 describe('mdg:method with AsyncSimpleSchema', () => {
+  if (Meteor.isFibersDisabled) {
+    // Guards against the test app resolving the synchronous aldeed:simple-schema@2
+    it('uses the async SimpleSchema 3 validator on Meteor 3', () => {
+      const validation = new AsyncSimpleSchema({}).validator()({});
+      assert.isFunction(validation.then);
+      return validation;
+    });
+  }
+
   const plainMethod = new ValidatedMethod({
     name: 'asyncSchema.plainMethod',
     validate: new AsyncSimpleSchema({}).validator(),

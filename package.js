@@ -21,10 +21,15 @@ Package.onUse(function (api) {
 });
 
 Package.onTest(function (api) {
+  // Dependencies of a tested package resolve to the oldest matching version,
+  // so a `2.0.0 || 3.0.0` range would always pick the synchronous
+  // SimpleSchema 2. Meteor 3 tools run on Node 20+, Meteor 2 tools on Node 14.
+  const isMeteor3 = Number(process.versions.node.split('.')[0]) >= 20;
+
   api.use([
     'ecmascript',
     'meteortesting:mocha@2.0.0 || 3.0.0',
-    'aldeed:simple-schema@2.0.0 || 3.0.0', // modern support
+    isMeteor3 ? 'aldeed:simple-schema@3.0.0' : 'aldeed:simple-schema@2.0.0',
     'mdg:validated-method',
     'random'
   ]);
