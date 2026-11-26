@@ -751,6 +751,44 @@ describe('mdg:method with AsyncSimpleSchema', () => {
     assert.deepEqual(calls, ['validated', 'run']);
   });
 
+  let serverValidations = 0;
+  const countedSchema = new AsyncSimpleSchema({ int: { type: Number } });
+  const methodCountingServerCalls = new ValidatedMethod({
+    name: 'asyncSchema.methodCountingServerCalls',
+    async validate(args) {
+      if (Meteor.isServer) serverValidations++;
+      await countedSchema.validator()(args);
+    },
+    run() { return 'result'; },
+  });
+  const serverValidationCount = new ValidatedMethod({
+    name: 'asyncSchema.serverValidationCount',
+    validate: null,
+    run() { return serverValidations; },
+  });
+
+  if (Meteor.isClient && supportsAsyncMethods) {
+    for (const [label, invoke] of [
+      ['callback', args => callWithCallback(methodCountingServerCalls, args)],
+      ['promise', args => methodCountingServerCalls.call(args)],
+    ]) {
+      it('rejects invalid arguments in the client stub without calling the server: ' + label, async () => {
+        const before = await serverValidationCount.callAsync({});
+        await expectRejection(() => invoke({}), error => {
+          assert.lengthOf(error.details, 1);
+          assert.equal(error.details[0].name, 'int');
+        });
+        assert.equal(await serverValidationCount.callAsync({}), before);
+      });
+
+      it('calls the server once client validation passes: ' + label, async () => {
+        const before = await serverValidationCount.callAsync({});
+        assert.equal(await invoke({ int: 1 }), 'result');
+        assert.equal(await serverValidationCount.callAsync({}), before + 1);
+      });
+    }
+  }
+
   it('preserves the schema rejection and never runs on invalid arguments', async () => {
     const schema = new AsyncSimpleSchema({ int: { type: Number } });
     let validationError;
@@ -995,6 +1033,121 @@ if (Meteor.isClient && supportsAsyncMethods) {
         () => assert.fail('Expected rejection'),
         caught => assert.strictEqual(caught, error)
       );
+    });
+  });
+}
+
+if (Meteor.isClient) {
+  describe('ValidatedMethod client call() with async validation', () => {
+    // `apply` runs the stub synchronously and rethrows its exceptions, like
+    // Meteor's client `apply` with throwStubExceptions.
+    function fixture({ validate = async () => {}, applyOptions, applyAsync } = {}) {
+      const calls = { apply: 0, applyAsync: 0, validate: 0 };
+      const method = new ValidatedMethod({
+        name: 'clientCallAsyncValidation',
+        connection: {
+          methods() {},
+          apply(name, [args]) {
+            calls.apply++;
+            return method._execute({ isSimulation: true }, args);
+          },
+          applyAsync(name, args, options, callback) {
+            calls.applyAsync++;
+            return applyAsync(callback);
+          },
+        },
+        validate() {
+          calls.validate++;
+          return validate();
+        },
+        applyOptions,
+        run() { return 'stub result'; },
+      });
+      return { method, calls };
+    }
+
+    const succeed = value => callback => { callback(undefined, value); };
+
+    if (supportsAsyncMethods) {
+      it('retries through callAsync and passes the result to the callback', async () => {
+        const serverResult = {};
+        const { method, calls } = fixture({ applyAsync: succeed(serverResult) });
+        let returned;
+        const result = await new Promise((resolve, reject) => {
+          returned = method.call({}, (error, value) => (error ? reject(error) : resolve(value)));
+        });
+        assert.isUndefined(returned);
+        assert.strictEqual(result, serverResult);
+        assert.deepEqual(calls, { apply: 1, applyAsync: 1, validate: 1 });
+      });
+
+      it('skips the synchronous stub once validation is known to be async', async () => {
+        const { method, calls } = fixture({ applyAsync: succeed('server result') });
+        assert.equal(await method.call({}), 'server result');
+        assert.equal(await method.call({}), 'server result');
+        assert.deepEqual(calls, { apply: 1, applyAsync: 2, validate: 1 });
+      });
+
+      it('returns the callAsync promise when no callback is passed', async () => {
+        const serverResult = {};
+        const { method } = fixture({ applyAsync: succeed(serverResult) });
+        const returned = method.call({});
+        assert.isFunction(returned.then);
+        assert.strictEqual(await returned, serverResult);
+      });
+
+      it('passes a callAsync rejection to the callback without unhandled rejections', async () => {
+        const error = new Meteor.Error('client-async-validation');
+        const unhandled = [];
+        const onUnhandled = event => unhandled.push(event.reason);
+        window.addEventListener('unhandledrejection', onUnhandled);
+        try {
+          const { method } = fixture({
+            validate: () => Promise.reject(error),
+            applyAsync: () => Promise.reject(error),
+          });
+          const received = await new Promise(resolve => method.call({}, resolve));
+          assert.strictEqual(received, error);
+          await new Promise(resolve => setTimeout(resolve, 50));
+          assert.isEmpty(unhandled);
+        } finally {
+          window.removeEventListener('unhandledrejection', onUnhandled);
+        }
+      });
+
+      it('keeps apply when throwStubExceptions is disabled', async () => {
+        const { method, calls } = fixture({ applyOptions: { throwStubExceptions: false } });
+        assert.equal(await method.call({}), 'stub result');
+        assert.deepEqual(calls, { apply: 1, applyAsync: 0, validate: 1 });
+      });
+
+      it('keeps apply inside another method simulation', async () => {
+        const { method, calls } = fixture();
+        const returned = DDP._CurrentMethodInvocation.withValue({ isSimulation: true },
+          () => method.call({}));
+        assert.equal(await returned, 'stub result');
+        assert.deepEqual(calls, { apply: 1, applyAsync: 0, validate: 1 });
+      });
+
+      it('rethrows other stub errors without retrying', () => {
+        const { method, calls } = fixture({ validate: () => 'not undefined' });
+        assert.throws(() => method.call({}), /Returning from validate/);
+        assert.deepEqual(calls, { apply: 1, applyAsync: 0, validate: 1 });
+      });
+    }
+
+    it('keeps apply when the Meteor release has no async methods', async () => {
+      const { callAsync, applyAsync } = Meteor;
+      Meteor.callAsync = undefined;
+      Meteor.applyAsync = undefined;
+      try {
+        const { method, calls } = fixture();
+        assert.equal(await method.call({}), 'stub result');
+        assert.deepEqual(calls, { apply: 1, applyAsync: 0, validate: 1 });
+      } finally {
+        Meteor.callAsync = callAsync;
+        Meteor.applyAsync = applyAsync;
+      }
     });
   });
 }

@@ -5,6 +5,21 @@ const supportsAsyncMethods = () =>
     typeof Meteor.callAsync === 'function' &&
     typeof Meteor.applyAsync === 'function';
 
+// Thrown from a client stub started by call() when validate returns a promise.
+// Meteor's client `apply` cannot wait for an async stub, so call() catches this
+// and retries through callAsync, which awaits validation before calling the server.
+const asyncValidationInCallStub = new Error(
+  'validate returned a promise inside a call() stub; retrying with callAsync');
+
+function callAsyncWithCallback(method, args, callback) {
+  const promise = method.callAsync(args);
+  if (!callback) {
+    return promise;
+  }
+  promise.then(result => callback(undefined, result), callback);
+  return undefined;
+}
+
 export class ValidatedMethod {
   constructor(options) {
     // Default to no mixins
@@ -76,18 +91,37 @@ export class ValidatedMethod {
       args = {};
     }
 
+    // Async validation needs callAsync on the client. It is detected on the
+    // first call and remembered, so later calls skip the synchronous stub.
+    const canRetryAsync = Meteor.isClient &&
+      supportsAsyncMethods() &&
+      this.applyOptions.throwStubExceptions &&
+      !DDP._CurrentMethodInvocation.get();
+    if (canRetryAsync && this._validatesAsync) {
+      return callAsyncWithCallback(this, args, callback);
+    }
+
+    const wasInCallStub = this._inCallStub;
+    this._inCallStub = canRetryAsync;
     try {
       return this.connection.apply(this.name, [args], this.applyOptions, callback);
     } catch (err) {
-      if (callback) {
-        // Get errors from the stub in the same way as from the server-side method
-        callback(err);
-      } else {
+      if (err !== asyncValidationInCallStub) {
+        if (callback) {
+          // Get errors from the stub in the same way as from the server-side method
+          callback(err);
+          return undefined;
+        }
         // No callback passed, throw instead of silently failing; this is what
         // "normal" Methods do if you don't pass a callback.
         throw err;
       }
+    } finally {
+      this._inCallStub = wasInCallStub;
     }
+
+    this._validatesAsync = true;
+    return callAsyncWithCallback(this, args, callback);
   }
 
   callAsync(args) {
@@ -150,6 +184,11 @@ perhaps you meant to throw an error?`);
 
     if (!isUndefined) {
       if (isPromiseLike) {
+        if (this._inCallStub) {
+          // The retry validates again, so this result is only discarded.
+          Promise.resolve(validateResult).catch(() => {});
+          throw asyncValidationInCallStub;
+        }
         const runAsync = async () => {
           const validateResultValue = await validateResult;
           if (typeof validateResultValue !== 'undefined') {
