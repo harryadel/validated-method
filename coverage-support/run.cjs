@@ -42,7 +42,11 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 // test-packages bundles a separate test app and Npm.require ignores NODE_PATH,
 // so the browser driver must be an npm dependency of that app. Meteor runs
 // `npm install` there when the app already has a package.json.
-// puppeteer 19 is the newest line that still runs on Meteor 2.x (Node 14).
+// puppeteer 19 is the newest line that still runs on Meteor 2.x (Node 14), but
+// its browser download breaks on Node 26 (Meteor 3.6); puppeteer 24 supports
+// Node 18+, which covers every Meteor 3 release.
+const modernNode = Number(process.versions.node.split('.')[0]) >= 18;
+const puppeteerVersion = modernNode ? '24.43.1' : '19.11.1';
 const testApp = path.join(root, '.test-app');
 fs.mkdirSync(testApp, { recursive: true });
 // Versions resolved by a newer Meteor release would block an older one
@@ -55,8 +59,16 @@ fs.writeFileSync(path.join(testApp, 'package.json'), `${JSON.stringify({
     '@swc/helpers': '^0.5.17',
     'jquery': '^3.7.1',
     'meteor-node-stubs': '^1.2.5',
-    'puppeteer': '19.11.1',
+    'puppeteer': puppeteerVersion,
   },
+  // npm 11.20+ (Meteor 3.6) skips unapproved install scripts; puppeteer's
+  // downloads the browser, without which the client tests hang until the timeout
+  allowScripts: {
+    [`puppeteer@${puppeteerVersion}`]: true,
+  },
+  // yauzl 2 stops extracting the browser zip part way on Node 26 and the
+  // download still reports success; yauzl 3 extracts it fully. npm 6 ignores this.
+  ...(modernNode && { overrides: { yauzl: '^3.2.0' } }),
 }, null, 2)}\n`);
 
 const timeoutMinutes = 10;
