@@ -374,6 +374,8 @@ For browser coverage, configure the test driver's browser support (for example,
 `TEST_BROWSER_DRIVER=puppeteer npm run test:coverage` with Puppeteer available to
 the driver). The client hook awaits transfer of its counters to the test server
 before finishing. Without a browser, the runner explicitly reports server-only
-coverage; client branches remain uncovered. Reports are also generated after
+coverage; client branches remain uncovered. With `TEST_BROWSER_DRIVER` set,
+missing browser coverage fails the run, and a run that does not finish within
+10 minutes is killed. Reports are also generated after
 test failures if the hooks collected counters. Startup failures produce an error
 instead of an empty coverage report.

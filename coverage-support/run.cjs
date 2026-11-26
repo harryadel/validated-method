@@ -56,6 +56,7 @@ fs.writeFileSync(path.join(testApp, 'package.json'), `${JSON.stringify({
   },
 }, null, 2)}\n`);
 
+const timeoutMinutes = 10;
 try {
   const result = spawnSync('meteor',
     ['test-packages', '--once', '--driver-package', 'meteortesting:mocha',
@@ -63,10 +64,14 @@ try {
       cwd: root,
       stdio: 'inherit',
       // a driver that fails after the server suite leaves `--once` running forever
-      timeout: 10 * 60 * 1000,
+      timeout: timeoutMinutes * 60 * 1000,
       killSignal: 'SIGKILL',
       env: { ...process.env, VALIDATED_METHOD_COVERAGE: raw },
     });
+  if (result.error && result.error.code === 'ETIMEDOUT') {
+    throw new Error(`meteor test-packages did not finish within ${timeoutMinutes} minutes `
+      + 'and was killed; the browser driver probably failed to start.');
+  }
   if (result.error) throw result.error;
   const files = fs.readdirSync(raw).filter(file => file.endsWith('.json'));
   if (!files.includes('server.json')) {
@@ -81,10 +86,18 @@ try {
     reports.create(reporter).execute(context);
   }
   console.log(`Coverage reports: ${output}`);
+  let exitCode = result.status === null ? 1 : result.status;
   if (!files.includes('client.json')) {
-    console.warn('Server-only coverage: no browser coverage was received.');
+    if (process.env.TEST_BROWSER_DRIVER) {
+      // e.g. an interrupted run: Meteor itself exits with 0 on Ctrl+C
+      console.error('No browser coverage was received although TEST_BROWSER_DRIVER is set; '
+        + 'the browser tests did not finish.');
+      exitCode = exitCode || 1;
+    } else {
+      console.warn('Server-only coverage: no browser coverage was received.');
+    }
   }
-  process.exitCode = result.status === null ? 1 : result.status;
+  process.exitCode = exitCode;
 } finally {
   restoreSource();
 }
