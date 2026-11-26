@@ -113,15 +113,18 @@ const asyncMethodNoTimeout = new ValidatedMethod({
 });
 
 const assertThrows = async ({ fn, message }) => {
+  let error;
   try {
     await fn();
-    assert.fail('Should have thrown');
   } catch (e) {
-    if (message) {
-      assert.match(e.message, new RegExp(message));
-    }
+    error = e;
   }
-}
+  // Asserted outside the try block so the failure cannot be swallowed
+  assert.exists(error, 'Should have thrown');
+  if (message) {
+    assert.match(error.message, new RegExp(message));
+  }
+};
 
 function schemaMixin(methodOptions) {
   methodOptions.validate = methodOptions.schema.validator();
